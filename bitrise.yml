@@ -1,0 +1,150 @@
+---
+format_version: '11'
+default_step_lib_source: 'https://github.com/bitrise-io/bitrise-steplib.git'
+project_type: android
+workflows:
+  deploy:
+    description: >
+      Deploys app using [Deploy to bitrise.ioStep]
+      (https://devcenter.bitrise.io/en/getting-started/getting-started-with-android-apps.html#deploying-an-android-app-to-bitrise-io-53056).
+
+      Next steps:
+
+      - Check out [Getting started with Android apps]
+      (https://devcenter.bitrise.io/en/getting-started/getting-started-with-android-apps.html)
+      for signing and deployment options.
+
+      - [Set up code signing with *Android Sign* Step]
+      (https://devcenter.bitrise.io/en/code-signing/android-code-signing/android-code-signing-using-the-android-sign-step.html).
+    steps:
+    - activate-ssh-key@4: {}
+    - git-clone@6: {}
+    - cache-pull@2: {}
+    - install-missing-android-tools@3:
+        inputs:
+        - gradlew_path: $PROJECT_LOCATION/gradlew
+    - script@1:
+        inputs:
+        - content: >-
+            VERSION_NAME=$(echo "$BITRISE_GIT_BRANCH" | sed
+            's/[^0-9.]*\([0-9.]*\).*/\1/')
+
+            echo "Extracted version name $VERSION_NAME"
+
+            envman add --key ANDROID_VERSION_NAME --value "$VERSION_NAME"
+    - change-android-versioncode-and-versionname@1:
+        inputs:
+        - build_gradle_path: $PROJECT_LOCATION/$MODULE/build.gradle
+    - android-build@1:
+        inputs:
+        - project_location: $PROJECT_LOCATION
+        - variant: release
+        - build_type: aab
+        - module: $MODULE
+    - sign-apk@1:
+        run_if: '{{getenv "BITRISEIO_ANDROID_KEYSTORE_URL" | ne ""}}'
+    - google-play-deploy@3:
+        inputs:
+        - package_name: $PACKAGE_NAME
+        - track: production
+        - app_path: $BITRISE_AAB_PATH
+        - whatsnews_dir: ./whatsnew
+        - service_account_json_key_path: $BITRISEIO_KEYSTORE_JSON_FILE_URL
+    - cache-push@2: {}
+    - deploy-to-bitrise-io@2: {}
+  primary:
+    description: >
+      Runs tests.
+
+
+      Next steps:
+
+      - Check out [Getting started with Android apps]
+      (https://devcenter.bitrise.io/en/getting-started/getting-started-with-android-apps.html).
+    steps:
+    - activate-ssh-key@4: {}
+    - git-clone@6: {}
+    - cache-pull@2: {}
+    - install-missing-android-tools@3:
+        inputs:
+        - gradlew_path: $PROJECT_LOCATION/gradlew
+    - android-unit-test@1:
+        inputs:
+        - project_location: $PROJECT_LOCATION
+        - variant: $VARIANT
+    - android-build-for-ui-testing@0:
+        inputs:
+        - variant: debug
+        - module: app
+    - avd-manager@1: {}
+    - wait-for-android-emulator@1: {}
+    - android-instrumented-test@0: {}
+    - cache-push@2: {}
+    - deploy-to-bitrise-io@2: {}
+  staging:
+    description: >
+      Runs tests.
+
+
+      Next steps:
+
+      - Check out [Getting started with Android apps]
+      (https://devcenter.bitrise.io/en/getting-started/getting-started-with-android-apps.html).
+    steps:
+    - activate-ssh-key@4: {}
+    - git-clone@6: {}
+    - script@1:
+        inputs:
+        - content: >-
+            VERSION_NAME=$(echo "$BITRISE_GIT_BRANCH" | sed
+            's/[^0-9.]*\([0-9.]*\).*/\1/')
+
+            echo "Extracted version name $VERSION_NAME"
+
+            envman add --key ANDROID_VERSION_NAME --value "$VERSION_NAME"
+    - change-android-versioncode-and-versionname@1:
+        inputs:
+        - new_version_name: $ANDROID_VERSION_NAME
+    - android-build@1:
+        inputs:
+        - variant: $VARIANT
+    - cache-pull@2: {}
+    - cache-push@2: {}
+    - deploy-to-bitrise-io@2: {}
+    - firebase-app-distribution@0:
+        inputs:
+        - app: $FIREBASE_APP_ID
+        - release_notes_file: release-note.txt
+        - groups: default-testers
+        - firebase_token: $FIREBISE_TOKEN
+meta:
+  bitrise.io:
+    stack: linux-docker-android-20.04
+    machine_type_id: standard
+app:
+  envs:
+  - opts:
+      is_expand: false
+    PROJECT_LOCATION: .
+  - opts:
+      is_expand: false
+    MODULE: app
+  - opts:
+      is_expand: false
+    VARIANT: debug
+  - opts:
+      is_expand: false
+    FIREBASE_APP_ID: '1:886257833674:android:daef7e65ec40b857194633'
+  - opts:
+      is_expand: false
+    PACKAGE_NAME: com.mrozm.cicd
+trigger_map:
+- push_branch: main
+  workflow: primary
+- push_branch: '*.*.*/staging'
+  workflow: staging
+- push_branch: '*.*.*/release'
+  workflow: deploy
+- pull_request_source_branch: '*'
+  workflow: primary
+  pull_request_target_branch: development
